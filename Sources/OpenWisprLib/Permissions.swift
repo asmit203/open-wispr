@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 struct Permissions {
@@ -55,5 +56,21 @@ struct Permissions {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    enum ScreenCaptureAccess {
+        case granted
+        case requiresRestart
+        case denied
+    }
+
+    static func ensureScreenCapture() -> ScreenCaptureAccess {
+        if CGPreflightScreenCaptureAccess() {
+            print("Screen Recording: granted")
+            return .granted
+        }
+
+        print("Screen Recording: requesting...")
+        return CGRequestScreenCaptureAccess() ? .requiresRestart : .denied
     }
 }
