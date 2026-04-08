@@ -9,7 +9,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     var config: Config!
     var isPressed = false
     var isReady = false
+    var isMeetingCaptureActive = false
+    var isStoppingMeetingCapture = false
+    var meetingCaptureSession: SystemAudioCaptureSession?
+    var meetingTranscriptSession: TranscriptLogStore.TranscriptLogSession?
+    let meetingChunkQueue = DispatchQueue(label: "open-wispr.meeting-transcription")
+    let meetingChunkGroup = DispatchGroup()
     public var lastTranscription: String?
+    public var currentMeetingTranscriptURL: URL? {
+        meetingTranscriptSession?.fileURL
+    }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         statusBar = StatusBarController()
@@ -44,6 +53,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.statusBar.onConfigChange = { [weak self] newConfig in
                 self?.applyConfigChange(newConfig)
+            }
+            self.statusBar.startMeetingCaptureHandler = { [weak self] in
+                self?.startMeetingCapture()
+            }
+            self.statusBar.stopMeetingCaptureHandler = { [weak self] in
+                self?.stopMeetingCapture()
+            }
+            self.statusBar.openTranscriptFolderHandler = { [weak self] in
+                self?.openMeetingTranscriptFolder()
+            }
+            self.statusBar.openCurrentTranscriptHandler = { [weak self] in
+                self?.openCurrentMeetingTranscript()
             }
             self.statusBar.buildMenu()
         }
@@ -199,6 +220,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleKeyDown() {
         guard isReady else { return }
+        guard !isMeetingCaptureActive, !isStoppingMeetingCapture else { return }
 
         let isToggle = config.toggleMode?.value ?? false
 
@@ -323,6 +345,214 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                     self.statusBar.state = .idle
                 }
             }
+        }
+    }
+
+    func startMeetingCapture() {
+        guard isReady, !isMeetingCaptureActive, !isStoppingMeetingCapture else { return }
+
+        do {
+            let directory = try TranscriptLogStore.validatedDirectory(path: config.meetingTranscriptDirectory)
+
+            switch Permissions.ensureScreenCapture() {
+            case .granted:
+                break
+            case .requiresRestart:
+                presentError("Restart OpenWispr after granting Screen & System Audio Recording permission")
+                return
+            case .denied:
+                presentError("Screen & System Audio Recording permission was denied")
+                return
+            }
+
+            let store = TranscriptLogStore(directory: directory)
+            let session = try store.startSession(model: config.modelSize, language: config.language)
+            let captureSession = SystemAudioCaptureSession()
+            meetingTranscriptSession = session
+            captureSession.chunkReadyHandler = { [weak self] chunk in
+                self?.processMeetingChunk(chunk)
+            }
+            captureSession.errorHandler = { [weak self] error in
+                self?.handleMeetingCaptureError(error)
+            }
+
+            statusBar.state = .meetingStarting
+            statusBar.buildMenu()
+
+            captureSession.start { [weak self] error in
+                guard let self = self else { return }
+                DispatchQueue.main.async {
+                    if let error {
+                        try? session.finish(at: Date())
+                        self.meetingTranscriptSession = nil
+                        self.presentError(error.localizedDescription)
+                        return
+                    }
+
+                    self.meetingCaptureSession = captureSession
+                    self.isMeetingCaptureActive = true
+                    self.isStoppingMeetingCapture = false
+                    self.statusBar.state = .meetingRecording
+                    self.statusBar.buildMenu()
+                    print("Meeting capture started: \(session.fileURL.path)")
+                }
+            }
+        } catch {
+            presentError(error.localizedDescription)
+        }
+    }
+
+    func stopMeetingCapture() {
+        guard (isMeetingCaptureActive || meetingCaptureSession != nil), !isStoppingMeetingCapture else { return }
+
+        isStoppingMeetingCapture = true
+        statusBar.state = .meetingStopping
+        statusBar.buildMenu()
+
+        meetingCaptureSession?.stop { [weak self] stopError in
+            guard let self = self else { return }
+            self.meetingChunkQueue.async {
+                self.meetingChunkGroup.wait()
+
+                var finalError = stopError
+                if let transcriptSession = self.meetingTranscriptSession {
+                    do {
+                        try transcriptSession.finish(at: Date())
+                    } catch {
+                        finalError = finalError ?? error
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    self.meetingCaptureSession = nil
+                    self.meetingTranscriptSession = nil
+                    self.isMeetingCaptureActive = false
+                    self.isStoppingMeetingCapture = false
+
+                    if let finalError {
+                        self.presentError(finalError.localizedDescription)
+                    } else {
+                        self.statusBar.state = .idle
+                        self.statusBar.buildMenu()
+                        print("Meeting capture stopped.")
+                    }
+                }
+            }
+        }
+    }
+
+    private func processMeetingChunk(_ chunk: SystemAudioChunk) {
+        let group = meetingChunkGroup
+        group.enter()
+        meetingChunkQueue.async { [weak self] in
+            defer {
+                try? FileManager.default.removeItem(at: chunk.sourceURL)
+                group.leave()
+            }
+            guard let self = self else { return }
+
+            do {
+                let convertedURL = try self.convertMeetingChunkToWhisperWav(chunk.sourceURL)
+                defer { try? FileManager.default.removeItem(at: convertedURL) }
+
+                let raw = try self.transcriber.transcribe(audioURL: convertedURL)
+                let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                guard !text.isEmpty else { return }
+
+                try self.meetingTranscriptSession?.append(text: text, at: chunk.startedAt)
+                DispatchQueue.main.async {
+                    self.statusBar.buildMenu()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    print("Meeting transcription error: \(error.localizedDescription)")
+                    self.statusBar.buildMenu()
+                }
+            }
+        }
+    }
+
+    private func convertMeetingChunkToWhisperWav(_ sourceURL: URL) throws -> URL {
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-wispr-meeting-\(UUID().uuidString).wav")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/afconvert")
+        process.arguments = [
+            "-f", "WAVE",
+            "-d", "LEI16@16000",
+            "-c", "1",
+            sourceURL.path,
+            destinationURL.path,
+        ]
+
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw MeetingCaptureError.audioConversionFailed(stderr)
+        }
+
+        return destinationURL
+    }
+
+    private func handleMeetingCaptureError(_ error: Error) {
+        DispatchQueue.main.async {
+            print("Meeting capture error: \(error.localizedDescription)")
+            if self.isMeetingCaptureActive || self.isStoppingMeetingCapture {
+                self.presentError(error.localizedDescription)
+            }
+        }
+    }
+
+    func openMeetingTranscriptFolder() {
+        do {
+            let directory = try TranscriptLogStore.validatedDirectory(path: config.meetingTranscriptDirectory)
+            NSWorkspace.shared.open(directory)
+        } catch {
+            presentError(error.localizedDescription)
+        }
+    }
+
+    func openCurrentMeetingTranscript() {
+        guard let url = currentMeetingTranscriptURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func presentError(_ message: String) {
+        print("Error: \(message)")
+        statusBar.state = .error(message)
+        statusBar.buildMenu()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            if case .error = self.statusBar.state {
+                self.restoreStatusBarState()
+                self.statusBar.buildMenu()
+            }
+        }
+    }
+
+    private func restoreStatusBarState() {
+        if isStoppingMeetingCapture {
+            statusBar.state = .meetingStopping
+        } else if isMeetingCaptureActive {
+            statusBar.state = .meetingRecording
+        } else {
+            statusBar.state = .idle
+        }
+    }
+}
+
+enum MeetingCaptureError: LocalizedError {
+    case audioConversionFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .audioConversionFailed(let details):
+            return details.isEmpty ? "Failed to convert captured system audio" : "Failed to convert captured system audio: \(details)"
         }
     }
 }
