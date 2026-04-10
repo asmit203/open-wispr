@@ -6,6 +6,19 @@ final class DictionaryPostProcessorTests: XCTestCase {
         XCTAssertEqual(DictionaryPostProcessor.buildPrompt(from: []), "")
     }
 
+    func testBuildPromptSingleEntry() {
+        let entries = [DictionaryEntry(from: "nural", to: "neural")]
+        XCTAssertEqual(DictionaryPostProcessor.buildPrompt(from: entries), "Vocabulary: neural.")
+    }
+
+    func testBuildPromptMultipleEntries() {
+        let entries = [
+            DictionaryEntry(from: "nural", to: "neural"),
+            DictionaryEntry(from: "kubernetees", to: "Kubernetes"),
+        ]
+        XCTAssertEqual(DictionaryPostProcessor.buildPrompt(from: entries), "Vocabulary: Kubernetes, neural.")
+    }
+
     func testBuildPromptDeduplicatesValues() {
         let entries = [
             DictionaryEntry(from: "nural", to: "neural"),
@@ -23,11 +36,43 @@ final class DictionaryPostProcessorTests: XCTestCase {
         )
     }
 
+    func testSingleWordReplacementIsCaseInsensitive() {
+        let entries = [DictionaryEntry(from: "nural", to: "neural")]
+        XCTAssertEqual(
+            DictionaryPostProcessor.process("the Nural network", dictionary: entries),
+            "the neural network"
+        )
+    }
+
+    func testSingleWordWithPeriodPreserved() {
+        let entries = [DictionaryEntry(from: "nural", to: "neural")]
+        XCTAssertEqual(
+            DictionaryPostProcessor.process("it is nural.", dictionary: entries),
+            "it is neural."
+        )
+    }
+
     func testMultiWordReplacement() {
         let entries = [DictionaryEntry(from: "chat gee pee tee", to: "ChatGPT")]
         XCTAssertEqual(
             DictionaryPostProcessor.process("I use chat gee pee tee daily", dictionary: entries),
             "I use ChatGPT daily"
+        )
+    }
+
+    func testMultiWordReplacementIsCaseInsensitive() {
+        let entries = [DictionaryEntry(from: "chat gee pee tee", to: "ChatGPT")]
+        XCTAssertEqual(
+            DictionaryPostProcessor.process("I use Chat Gee Pee Tee daily", dictionary: entries),
+            "I use ChatGPT daily"
+        )
+    }
+
+    func testMultiWordReplacementWithTrailingPunctuation() {
+        let entries = [DictionaryEntry(from: "chat gee pee tee", to: "ChatGPT")]
+        XCTAssertEqual(
+            DictionaryPostProcessor.process("I use chat gee pee tee.", dictionary: entries),
+            "I use ChatGPT."
         )
     }
 
@@ -50,6 +95,14 @@ final class DictionaryPostProcessorTests: XCTestCase {
         )
     }
 
+    func testNoMatchPassesThrough() {
+        let entries = [DictionaryEntry(from: "nural", to: "neural")]
+        XCTAssertEqual(
+            DictionaryPostProcessor.process("hello world", dictionary: entries),
+            "hello world"
+        )
+    }
+
     func testDuplicateFromKeepsFirstEncounteredEntry() {
         let entries = [
             DictionaryEntry(from: "nural", to: "neural"),
@@ -58,6 +111,17 @@ final class DictionaryPostProcessorTests: XCTestCase {
         XCTAssertEqual(
             DictionaryPostProcessor.process("the nural network", dictionary: entries),
             "the neural network"
+        )
+    }
+
+    func testMultipleReplacementsInOneSentence() {
+        let entries = [
+            DictionaryEntry(from: "nural", to: "neural"),
+            DictionaryEntry(from: "kubernetees", to: "Kubernetes"),
+        ]
+        XCTAssertEqual(
+            DictionaryPostProcessor.process("nural nets on kubernetees", dictionary: entries),
+            "neural nets on Kubernetes"
         )
     }
 

@@ -14,25 +14,11 @@
 
 ## Install
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/human37/open-wispr/main/scripts/install.sh | bash
-```
-
-The script handles everything: installs via Homebrew, walks you through granting permissions, downloads the Whisper model, and starts the service. You'll see live feedback as each step completes.
-
-A waveform icon appears in your menu bar when it's running.
+open-wispr is intended to be built and run from source for local development. If you want the packaged install flow, see [docs/install-guide.md](/Users/asmitganguly/Developer/hobby/foss/open-wispr/docs/install-guide.md).
 
 The default hotkey is the **Globe key** (🌐, bottom-left). Hold it, speak, release.
 
-> **[Full installation guide](docs/install-guide.md)** — permissions walkthrough with screenshots, non-English macOS instructions, and troubleshooting.
-
-## Uninstall
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/human37/open-wispr/main/scripts/uninstall.sh | bash
-```
-
-This stops the service, removes the formula, tap, config, models, app bundle, logs, and permissions.
+A waveform icon appears in your menu bar when it's running.
 
 ## Configuration
 
@@ -49,7 +35,7 @@ Edit `~/.config/open-wispr/config.json`:
 }
 ```
 
-Then restart: `brew services restart open-wispr`
+Then restart the local app using the dev instructions in [docs/dev-process.md](/Users/asmitganguly/Developer/hobby/foss/open-wispr/docs/dev-process.md).
 
 | Option | Default | Values |
 |---|---|---|
@@ -123,24 +109,7 @@ swift build -c release
 
 ### `scripts/dev.sh` — interactive dev build
 
-Running `bash scripts/dev.sh` is the easiest way to **configure, build, and launch a local development build** in one step. It does the following:
-
-1. **Reads your current config** from `~/.config/open-wispr/config.json` and shows the existing values as defaults.
-2. **Interactively prompts** you to update every setting:
-   - **Model size** — choose from eight options (e.g. `tiny.en`, `base.en`, `small.en`, `medium.en`, or the equivalent multilingual variants).
-   - **Language** — ISO 639-1 code (e.g. `en`, `fr`) or `auto` for auto-detect.
-   - **Spoken punctuation** — whether saying "comma", "period", etc. inserts punctuation marks.
-   - **Max recordings** — `0` = temp-only / nothing stored (privacy default); `1–100` = keep that many recent recordings locally for re-transcription.
-   - **Toggle mode** — `false` = hold-to-talk (default); `true` = press once to start, press again to stop.
-   - **Hotkey** — enter a human-readable key name such as `fn`, `f5`, or a chord like `cmd+shift+r`.
-3. **Writes** the chosen settings to `~/.config/open-wispr/config.json`.
-4. **Stops** any running `open-wispr start` process and the Homebrew-managed service.
-5. **Removes** the Homebrew-installed `open-wispr` formula (if present) so the locally-built binary takes precedence.
-6. **Installs** `whisper-cpp` via Homebrew if it is not already present.
-7. **Builds** the Swift app from source in release mode (`swift build -c release`).
-8. **Bundles** the binary into `OpenWispr.app` via `scripts/bundle-app.sh`.
-9. **Copies** `OpenWispr.app` to `~/Applications/` so macOS recognizes it for microphone / accessibility permission grants.
-10. **Launches** `~/Applications/OpenWispr.app/Contents/MacOS/open-wispr start`.
+Running `bash scripts/dev.sh` is the easiest way to configure, build, and launch a local development build. The full reinstall and cleanup workflow is documented in [docs/dev-process.md](/Users/asmitganguly/Developer/hobby/foss/open-wispr/docs/dev-process.md).
 
 ## Support
 
