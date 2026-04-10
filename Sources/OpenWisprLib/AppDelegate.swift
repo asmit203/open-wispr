@@ -15,18 +15,32 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     var meetingTranscriptSession: TranscriptLogStore.TranscriptLogSession?
     let meetingChunkQueue = DispatchQueue(label: "open-wispr.meeting-transcription")
     let meetingChunkGroup = DispatchGroup()
+    private var startupPreparationComplete = false
+    private var hasLoggedAccessibilityGranted = false
+    private var hasRequestedAccessibility = false
     public var lastTranscription: String?
     public var currentMeetingTranscriptURL: URL? {
         meetingTranscriptSession?.fileURL
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleApplicationDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
+
         statusBar = StatusBarController()
         recorder = AudioRecorder()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.setup()
         }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     private func setup() {
@@ -46,6 +60,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         transcriber = Transcriber(modelSize: config.modelSize, language: config.language)
         transcriber.spokenPunctuation = config.spokenPunctuation?.value ?? false
+        Permissions.noteLaunchPermissionState()
 
         DispatchQueue.main.async {
             self.statusBar.reprocessHandler = { [weak self] url in
@@ -74,32 +89,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        if Permissions.didUpgrade() {
-            print("Accessibility: upgrade detected, resetting permissions...")
-            Permissions.resetAccessibility()
-            Thread.sleep(forTimeInterval: 1)
-        }
-
-        if !AXIsProcessTrusted() {
-            DispatchQueue.main.async {
-                self.statusBar.state = .waitingForPermission
-                self.statusBar.buildMenu()
-            }
-        }
-
         Permissions.ensureMicrophone()
-
-        if !AXIsProcessTrusted() {
-            print("Accessibility: not granted")
-            Permissions.openAccessibilitySettings()
-            print("Waiting for Accessibility permission...")
-            while !AXIsProcessTrusted() {
-                Thread.sleep(forTimeInterval: 0.5)
-            }
-            print("Accessibility: granted")
-        } else {
-            print("Accessibility: granted")
-        }
+        requestAccessibilityIfNeeded()
 
         if !Transcriber.modelExists(modelSize: config.modelSize) {
             DispatchQueue.main.async {
@@ -131,9 +122,62 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        startupPreparationComplete = true
         DispatchQueue.main.async { [weak self] in
-            self?.startListening()
+            self?.startListeningIfPossible()
         }
+    }
+
+    @objc private func handleApplicationDidBecomeActive() {
+        if Permissions.screenCapturePermissionWasGrantedAfterLaunch() {
+            presentError("Restart OpenWispr after granting Screen & System Audio Recording permission")
+        }
+
+        requestAccessibilityIfNeeded(promptUser: false)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.startListeningIfPossible()
+        }
+    }
+
+    private func requestAccessibilityIfNeeded(promptUser: Bool = true) {
+        guard !Permissions.hasAccessibilityPermission() else {
+            hasRequestedAccessibility = false
+            logAccessibilityGrantedIfNeeded()
+            return
+        }
+
+        if !hasRequestedAccessibility {
+            print("Accessibility: not granted")
+        }
+        if promptUser && !hasRequestedAccessibility {
+            _ = Permissions.promptAccessibility()
+            Permissions.openAccessibilitySettings()
+            hasRequestedAccessibility = true
+        }
+
+        DispatchQueue.main.async {
+            self.statusBar.state = .waitingForPermission
+            self.statusBar.buildMenu()
+        }
+    }
+
+    private func logAccessibilityGrantedIfNeeded() {
+        guard !hasLoggedAccessibilityGranted else { return }
+        print("Accessibility: granted")
+        hasLoggedAccessibilityGranted = true
+    }
+
+    private func startListeningIfPossible() {
+        guard startupPreparationComplete, !isReady else { return }
+        guard Permissions.hasAccessibilityPermission() else {
+            statusBar.state = .waitingForPermission
+            statusBar.buildMenu()
+            return
+        }
+
+        logAccessibilityGrantedIfNeeded()
+        startListening()
     }
 
     private func startListening() {
@@ -360,8 +404,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             case .requiresRestart:
                 presentError("Restart OpenWispr after granting Screen & System Audio Recording permission")
                 return
-            case .denied:
-                presentError("Screen & System Audio Recording permission was denied")
+            case .needsSystemSettings:
+                Permissions.openScreenCaptureSettings()
+                presentError("Use System Settings to enable Screen & System Audio Recording. If you just enabled it, restart OpenWispr.")
                 return
             }
 

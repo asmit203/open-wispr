@@ -122,6 +122,7 @@ class StatusBarController: NSObject {
         }
         if case .waitingForPermission = state {
             let target = MenuItemTarget {
+                _ = Permissions.promptAccessibility()
                 Permissions.openAccessibilitySettings()
             }
             menuItemTargets.append(target)
