@@ -2,6 +2,7 @@ import AppKit
 
 public class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBar: StatusBarController!
+    var activityOverlay: ActivityOverlayController!
     var hotkeyManager: HotkeyManager?
     var recorder: AudioRecorder!
     var transcriber: Transcriber!
@@ -33,6 +34,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         statusBar = StatusBarController()
+        activityOverlay = ActivityOverlayController()
+        statusBar.onStateChange = { [weak self] state in
+            self?.activityOverlay.update(for: state)
+        }
+        activityOverlay.update(for: statusBar.state)
         recorder = AudioRecorder()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -42,6 +48,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        activityOverlay?.hideAll()
     }
 
     private func setup() {
