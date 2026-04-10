@@ -18,6 +18,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private var startupPreparationComplete = false
     private var hasLoggedAccessibilityGranted = false
     private var hasRequestedAccessibility = false
+    private var meetingTranscriptContext = ""
     public var lastTranscription: String?
     public var currentMeetingTranscriptURL: URL? {
         meetingTranscriptSession?.fileURL
@@ -60,6 +61,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         transcriber = Transcriber(modelSize: config.modelSize, language: config.language)
         transcriber.spokenPunctuation = config.spokenPunctuation?.value ?? false
+        transcriber.customDictionary = config.customDictionary ?? []
         Permissions.noteLaunchPermissionState()
 
         DispatchQueue.main.async {
@@ -219,6 +221,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         recorder.preferredDeviceID = config.audioInputDeviceID
         transcriber = Transcriber(modelSize: config.modelSize, language: config.language)
         transcriber.spokenPunctuation = config.spokenPunctuation?.value ?? false
+        transcriber.customDictionary = config.customDictionary ?? []
         inserter = TextInserter()
 
         hotkeyManager?.stop()
@@ -327,7 +330,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             }
             do {
                 let raw = try self.transcriber.transcribe(audioURL: audioURL)
-                let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                let text = self.postProcess(raw)
                 if maxRecordings > 0 {
                     RecordingStore.prune(maxCount: maxRecordings)
                 }
@@ -367,7 +370,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             do {
                 let raw = try self.transcriber.transcribe(audioURL: audioURL)
-                let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                let text = self.postProcess(raw)
                 DispatchQueue.main.async {
                     if !text.isEmpty {
                         self.lastTranscription = text
@@ -413,6 +416,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             let store = TranscriptLogStore(directory: directory)
             let session = try store.startSession(model: config.modelSize, language: config.language)
             let captureSession = SystemAudioCaptureSession()
+            meetingTranscriptContext = ""
             meetingTranscriptSession = session
             captureSession.chunkReadyHandler = { [weak self] chunk in
                 self?.processMeetingChunk(chunk)
@@ -473,6 +477,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                     self.meetingTranscriptSession = nil
                     self.isMeetingCaptureActive = false
                     self.isStoppingMeetingCapture = false
+                    self.meetingTranscriptContext = ""
 
                     if let finalError {
                         self.presentError(finalError.localizedDescription)
@@ -501,10 +506,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 defer { try? FileManager.default.removeItem(at: convertedURL) }
 
                 let raw = try self.transcriber.transcribe(audioURL: convertedURL)
-                let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                let processed = self.postProcess(raw)
+                let text = TranscriptOverlapResolver.trimCurrentText(
+                    previousText: self.meetingTranscriptContext,
+                    currentText: processed
+                )
                 guard !text.isEmpty else { return }
 
-                try self.meetingTranscriptSession?.append(text: text, at: chunk.startedAt)
+                try self.meetingTranscriptSession?.append(text: text, at: chunk.transcriptTimestamp)
+                self.updateMeetingTranscriptContext(with: text)
                 DispatchQueue.main.async {
                     self.statusBar.buildMenu()
                 }
@@ -588,6 +598,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             statusBar.state = .idle
         }
+    }
+
+    private func postProcess(_ raw: String) -> String {
+        var text = (config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+        text = DictionaryPostProcessor.process(text, dictionary: config.customDictionary ?? [])
+        return text
+    }
+
+    private func updateMeetingTranscriptContext(with text: String, maxTokens: Int = 64) {
+        let combined = meetingTranscriptContext.isEmpty ? text : "\(meetingTranscriptContext) \(text)"
+        let tokens = combined.split(whereSeparator: \.isWhitespace)
+        meetingTranscriptContext = tokens.suffix(maxTokens).joined(separator: " ")
     }
 }
 
