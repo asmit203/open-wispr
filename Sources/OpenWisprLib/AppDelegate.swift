@@ -89,7 +89,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        Permissions.ensureMicrophone()
         requestAccessibilityIfNeeded()
 
         if !Transcriber.modelExists(modelSize: config.modelSize) {
@@ -289,6 +288,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleRecordingStart() {
         guard !isPressed else { return }
+
+        switch Permissions.ensureMicrophone() {
+        case .granted:
+            break
+        case .denied:
+            Permissions.openMicrophoneSettings()
+            presentError("Enable Microphone permission before starting dictation")
+            return
+        }
+
         isPressed = true
         statusBar.state = .recording
         do {
