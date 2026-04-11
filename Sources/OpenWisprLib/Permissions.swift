@@ -9,20 +9,36 @@ struct Permissions {
     private static let screenCaptureWasMissingAtLaunchKey = "openwispr.screenCaptureWasMissingAtLaunch"
     private static var screenCaptureRequestAttemptedThisLaunch = false
 
-    static func ensureMicrophone() {
+    enum MicrophoneAccess {
+        case granted
+        case denied
+    }
+
+    static func ensureMicrophone() -> MicrophoneAccess {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             print("Microphone: granted")
+            return .granted
         case .notDetermined:
             print("Microphone: requesting...")
             let semaphore = DispatchSemaphore(value: 0)
+            var grantedAccess = false
             AVCaptureDevice.requestAccess(for: .audio) { granted in
+                grantedAccess = granted
                 print("Microphone: \(granted ? "granted" : "denied")")
                 semaphore.signal()
             }
             semaphore.wait()
+            return grantedAccess ? .granted : .denied
         default:
             print("Microphone: denied — grant in System Settings → Privacy & Security → Microphone")
+            return .denied
+        }
+    }
+
+    static func openMicrophoneSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
         }
     }
 

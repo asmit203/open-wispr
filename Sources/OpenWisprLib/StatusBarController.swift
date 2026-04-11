@@ -285,8 +285,12 @@ class StatusBarController: NSObject {
         } else {
             transcriptFolderTitle = "Not Set"
         }
-        let transcriptItem = NSMenuItem(title: "Meeting Transcript Folder: \(transcriptFolderTitle)", action: nil, keyEquivalent: "")
-        let transcriptSubmenu = NSMenu()
+        let meetingItem = NSMenuItem(title: "Meeting Capture", action: nil, keyEquivalent: "")
+        let meetingSubmenu = NSMenu()
+
+        let transcriptStatusItem = NSMenuItem(title: "Transcript Folder: \(transcriptFolderTitle)", action: nil, keyEquivalent: "")
+        transcriptStatusItem.isEnabled = false
+        meetingSubmenu.addItem(transcriptStatusItem)
 
         let chooseFolderTarget = MenuItemTarget { [weak self] in
             self?.chooseMeetingTranscriptFolder()
@@ -294,7 +298,7 @@ class StatusBarController: NSObject {
         menuItemTargets.append(chooseFolderTarget)
         let chooseFolderItem = NSMenuItem(title: "Choose Folder...", action: #selector(MenuItemTarget.invoke), keyEquivalent: "")
         chooseFolderItem.target = chooseFolderTarget
-        transcriptSubmenu.addItem(chooseFolderItem)
+        meetingSubmenu.addItem(chooseFolderItem)
 
         let openFolderTarget = MenuItemTarget { [weak self] in
             self?.openTranscriptFolderHandler?()
@@ -303,7 +307,7 @@ class StatusBarController: NSObject {
         let openFolderItem = NSMenuItem(title: "Open Folder", action: #selector(MenuItemTarget.invoke), keyEquivalent: "")
         openFolderItem.target = openFolderTarget
         openFolderItem.isEnabled = config.meetingTranscriptDirectory?.isEmpty == false
-        transcriptSubmenu.addItem(openFolderItem)
+        meetingSubmenu.addItem(openFolderItem)
 
         if let delegate = NSApplication.shared.delegate as? AppDelegate,
            delegate.currentMeetingTranscriptURL != nil {
@@ -313,11 +317,8 @@ class StatusBarController: NSObject {
             menuItemTargets.append(openCurrentTarget)
             let openCurrentItem = NSMenuItem(title: "Open Current Transcript", action: #selector(MenuItemTarget.invoke), keyEquivalent: "")
             openCurrentItem.target = openCurrentTarget
-            transcriptSubmenu.addItem(openCurrentItem)
+            meetingSubmenu.addItem(openCurrentItem)
         }
-
-        transcriptItem.submenu = transcriptSubmenu
-        menu.addItem(transcriptItem)
 
         let delegate = NSApplication.shared.delegate as? AppDelegate
         let isMeetingActive = delegate?.isMeetingCaptureActive ?? false
@@ -339,7 +340,11 @@ class StatusBarController: NSObject {
         if !isMeetingActive && !isMeetingStopping && (config.meetingTranscriptDirectory?.isEmpty != false) {
             meetingAction.isEnabled = false
         }
-        menu.addItem(meetingAction)
+        meetingSubmenu.addItem(NSMenuItem.separator())
+        meetingSubmenu.addItem(meetingAction)
+
+        meetingItem.submenu = meetingSubmenu
+        menu.addItem(meetingItem)
 
         menu.addItem(NSMenuItem.separator())
 
