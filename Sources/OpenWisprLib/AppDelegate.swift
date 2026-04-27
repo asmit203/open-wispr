@@ -60,6 +60,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         transcriber = Transcriber(modelSize: config.modelSize, language: config.language)
         transcriber.spokenPunctuation = config.spokenPunctuation?.value ?? false
+        transcriber.customDictionary = config.customDictionary ?? []
         Permissions.noteLaunchPermissionState()
 
         DispatchQueue.main.async {
@@ -218,6 +219,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         recorder.preferredDeviceID = config.audioInputDeviceID
         transcriber = Transcriber(modelSize: config.modelSize, language: config.language)
         transcriber.spokenPunctuation = config.spokenPunctuation?.value ?? false
+        transcriber.customDictionary = config.customDictionary ?? []
         inserter = TextInserter()
 
         hotkeyManager?.stop()
@@ -336,7 +338,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             }
             do {
                 let raw = try self.transcriber.transcribe(audioURL: audioURL)
-                let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                let text = self.postProcess(raw)
                 if maxRecordings > 0 {
                     RecordingStore.prune(maxCount: maxRecordings)
                 }
@@ -367,6 +369,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func postProcess(_ raw: String) -> String {
+        let punctuated = (config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+        return DictionaryPostProcessor.process(punctuated, dictionary: config.customDictionary ?? [])
+    }
+
     public func reprocess(audioURL: URL) {
         guard case .idle = statusBar.state else { return }
 
@@ -376,7 +383,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             do {
                 let raw = try self.transcriber.transcribe(audioURL: audioURL)
-                let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                let text = self.postProcess(raw)
                 DispatchQueue.main.async {
                     if !text.isEmpty {
                         self.lastTranscription = text
@@ -510,7 +517,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 defer { try? FileManager.default.removeItem(at: convertedURL) }
 
                 let raw = try self.transcriber.transcribe(audioURL: convertedURL)
-                let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                let text = self.postProcess(raw)
                 guard !text.isEmpty else { return }
 
                 try self.meetingTranscriptSession?.append(text: text, at: chunk.startedAt)

@@ -45,7 +45,12 @@ Edit `~/.config/open-wispr/config.json`:
   "language": "en",
   "spokenPunctuation": false,
   "maxRecordings": 0,
-  "toggleMode": false
+  "toggleMode": false,
+  "meetingTranscriptDirectory": null,
+  "customDictionary": [
+    { "from": "nural", "to": "neural" },
+    { "from": "chat gee pee tee", "to": "ChatGPT" }
+  ]
 }
 ```
 
@@ -60,6 +65,8 @@ Then restart: `brew services restart open-wispr`
 | **spokenPunctuation** | `false` | Say "comma", "period", etc. to insert punctuation instead of auto-punctuation |
 | **maxRecordings** | `0` | Optionally store past recordings locally as `.wav` files for re-transcribing from the tray menu. `0` = nothing stored (default). Set 1-100 to keep that many recent recordings. |
 | **toggleMode** | `false` | Press hotkey once to start recording, press again to stop. Default is hold-to-talk. |
+| **meetingTranscriptDirectory** | `null` | Folder where Meeting Capture writes timestamped transcript `.md` files. Can also be set from the menu bar. |
+| **customDictionary** | `null` | Corrections for words or phrases Whisper consistently mishears. Also managed from **Custom Dictionary...** in the menu bar. |
 
 ### Models
 
@@ -82,7 +89,7 @@ If the Globe key opens the emoji picker: **System Settings → Keyboard → "Pre
 
 ## Menu bar
 
-Click the waveform icon for status and options. **Recent Recordings** lists your last recordings; click one to re-transcribe and copy the result to the clipboard.
+Click the waveform icon for status and options. **Meeting Capture** records system audio to timestamped transcript files without pasting text into the focused app. **Recent Recordings** lists your last dictation recordings; click one to re-transcribe and copy the result to the clipboard.
 
 | State | Icon |
 |---|---|
@@ -92,7 +99,7 @@ Click the waveform icon for status and options. **Recent Recordings** lists your
 | Downloading model | Progress ring |
 | Waiting for permission | Lock |
 
-Click the menu bar icon to access **Copy Last Dictation** — recovers your most recent transcription if you dictated without a text field focused.
+Click the menu bar icon to access **Copy Last Dictation** — recovers your most recent transcription if you dictated without a text field focused. Use **Custom Dictionary...** to add local phrase corrections and vocabulary hints.
 
 ## Compare
 
@@ -107,7 +114,7 @@ Click the menu bar icon to access **Copy Last Dictation** — recovers your most
 
 ## Privacy
 
-open-wispr is completely local. Audio is recorded to a temp file, transcribed by whisper.cpp on your CPU/GPU, and the temp file is deleted. No network requests are made except to download the Whisper model on first run. Optionally, you can configure open-wispr to store a number of past recordings locally via the `maxRecordings` setting. Those recordings stay private and on your machine, and we default to not storing anything.
+open-wispr is completely local. Audio is recorded to a temp file, transcribed by whisper.cpp on your CPU/GPU, and the temp file is deleted. No network requests are made except to download the Whisper model on first run. Optionally, you can configure open-wispr to store a number of past recordings locally via the `maxRecordings` setting. Meeting Capture keeps only transcript markdown files in the folder you choose. Those recordings and transcripts stay private and on your machine, and we default to not storing raw dictation recordings.
 
 ## Roadmap
 
