@@ -14,25 +14,11 @@
 
 ## Install
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/human37/open-wispr/main/scripts/install.sh | bash
-```
-
-The script handles everything: installs via Homebrew, walks you through granting permissions, downloads the Whisper model, and starts the service. You'll see live feedback as each step completes.
-
-A waveform icon appears in your menu bar when it's running.
+open-wispr is intended to be built and run from source for local development. If you want the packaged install flow, see [docs/install-guide.md](/Users/asmitganguly/Developer/hobby/foss/open-wispr/docs/install-guide.md).
 
 The default hotkey is the **Globe key** (🌐, bottom-left). Hold it, speak, release.
 
-> **[Full installation guide](docs/install-guide.md)** — permissions walkthrough with screenshots, non-English macOS instructions, and troubleshooting.
-
-## Uninstall
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/human37/open-wispr/main/scripts/uninstall.sh | bash
-```
-
-This stops the service, removes the formula, tap, config, models, app bundle, logs, and permissions.
+A waveform icon appears in your menu bar when it's running.
 
 ## Configuration
 
@@ -54,7 +40,7 @@ Edit `~/.config/open-wispr/config.json`:
 }
 ```
 
-Then restart: `brew services restart open-wispr`
+Then restart the local app using the dev instructions in [docs/dev-process.md](/Users/asmitganguly/Developer/hobby/foss/open-wispr/docs/dev-process.md).
 
 | Option | Default | Values |
 |---|---|---|
@@ -129,6 +115,10 @@ brew install whisper-cpp
 swift build -c release
 .build/release/open-wispr start
 ```
+
+### `scripts/dev.sh` — interactive dev build
+
+Running `bash scripts/dev.sh` is the easiest way to configure, build, and launch a local development build. The full reinstall and cleanup workflow is documented in [docs/dev-process.md](/Users/asmitganguly/Developer/hobby/foss/open-wispr/docs/dev-process.md).
 
 ## Support
 

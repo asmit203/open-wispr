@@ -1,13 +1,12 @@
 import AppKit
 
 class DictionaryWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
+    static let shared = DictionaryWindowController()
 
     private var tableView: NSTableView!
     private var entries: [DictionaryEntry] = []
     private let fromColumnID = NSUserInterfaceItemIdentifier("from")
     private let toColumnID = NSUserInterfaceItemIdentifier("to")
-
-    static let shared = DictionaryWindowController()
 
     private init() {
         let window = NSWindow(
@@ -43,11 +42,16 @@ class DictionaryWindowController: NSWindowController, NSTableViewDataSource, NST
         var config = Config.load()
         var seen = Set<String>()
         var cleaned: [DictionaryEntry] = []
-        for entry in entries.reversed() where !entry.from.isEmpty && !entry.to.isEmpty {
-            if seen.insert(entry.from).inserted {
-                cleaned.append(entry)
+
+        for entry in entries.reversed() {
+            let from = entry.from.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let to = entry.to.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !from.isEmpty, !to.isEmpty else { continue }
+            if seen.insert(from).inserted {
+                cleaned.append(DictionaryEntry(from: from, to: to))
             }
         }
+
         cleaned.reverse()
         config.customDictionary = cleaned.isEmpty ? nil : cleaned
         try? config.save()
@@ -58,7 +62,7 @@ class DictionaryWindowController: NSWindowController, NSTableViewDataSource, NST
     }
 
     private func setupUI() {
-        guard let window = self.window else { return }
+        guard let window else { return }
 
         let contentView = NSView(frame: window.contentView!.bounds)
         contentView.autoresizingMask = [.width, .height]
@@ -136,9 +140,9 @@ class DictionaryWindowController: NSWindowController, NSTableViewDataSource, NST
     func tableView(_ tableView: NSTableView, setObjectValue object: Any?, for tableColumn: NSTableColumn?, row: Int) {
         guard row < entries.count, let columnID = tableColumn?.identifier, let value = object as? String else { return }
         if columnID == fromColumnID {
-            entries[row].from = value.trimmingCharacters(in: .whitespaces).lowercased()
+            entries[row].from = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         } else if columnID == toColumnID {
-            entries[row].to = value.trimmingCharacters(in: .whitespaces)
+            entries[row].to = value.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         saveEntries()
     }

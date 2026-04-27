@@ -6,6 +6,7 @@ import ScreenCaptureKit
 public struct SystemAudioChunk {
     public let sourceURL: URL
     public let startedAt: Date
+    public let transcriptTimestamp: Date
 }
 
 enum SystemAudioCaptureError: LocalizedError {
@@ -31,16 +32,20 @@ final class SystemAudioCaptureSession: NSObject, SCStreamOutput, SCStreamDelegat
 
     private let sampleQueue = DispatchQueue(label: "open-wispr.system-audio.samples")
     private let chunkDurationSeconds: Double
+    private let overlapDurationSeconds: Double
     private var stream: SCStream?
     private var currentChunkFile: AVAudioFile?
     private var currentChunkURL: URL?
     private var currentChunkStartDate: Date?
+    private var currentChunkTranscriptDate: Date?
     private var currentChunkFrameCount: AVAudioFramePosition = 0
     private var currentSampleRate: Double = 48_000
     private var isCapturing = false
+    private var overlapBuffer: AVAudioPCMBuffer?
 
-    init(chunkDurationSeconds: Double = 30) {
+    init(chunkDurationSeconds: Double = 30, overlapDurationSeconds: Double = 2.5) {
         self.chunkDurationSeconds = chunkDurationSeconds
+        self.overlapDurationSeconds = overlapDurationSeconds
     }
 
     func start(completion: @escaping (Error?) -> Void) {
@@ -155,6 +160,7 @@ final class SystemAudioCaptureSession: NSObject, SCStreamOutput, SCStreamDelegat
         try currentChunkFile?.write(from: buffer)
         currentChunkFrameCount += AVAudioFramePosition(buffer.frameLength)
         currentSampleRate = buffer.format.sampleRate
+        retainOverlap(from: buffer)
 
         let threshold = AVAudioFramePosition(chunkDurationSeconds * currentSampleRate)
         if currentChunkFrameCount >= threshold {
@@ -165,22 +171,31 @@ final class SystemAudioCaptureSession: NSObject, SCStreamOutput, SCStreamDelegat
     private func openChunkFile(for format: AVAudioFormat) throws {
         let directory = FileManager.default.temporaryDirectory
         let url = directory.appendingPathComponent("open-wispr-meeting-\(UUID().uuidString).caf")
+        let now = Date()
+        let seededFrames = overlapBuffer?.frameLength ?? 0
         currentChunkURL = url
-        currentChunkStartDate = Date()
-        currentChunkFrameCount = 0
+        currentChunkStartDate = now.addingTimeInterval(-(Double(seededFrames) / format.sampleRate))
+        currentChunkTranscriptDate = now
+        currentChunkFrameCount = AVAudioFramePosition(seededFrames)
         currentSampleRate = format.sampleRate
         do {
             currentChunkFile = try AVAudioFile(forWriting: url, settings: format.settings)
+            if let overlapBuffer, overlapBuffer.frameLength > 0 {
+                try currentChunkFile?.write(from: overlapBuffer)
+            }
         } catch {
             currentChunkFile = nil
             currentChunkURL = nil
             currentChunkStartDate = nil
+            currentChunkTranscriptDate = nil
             throw SystemAudioCaptureError.failedToCreateChunkFile
         }
     }
 
     private func finishCurrentChunk() throws {
-        guard let url = currentChunkURL, let startedAt = currentChunkStartDate else {
+        guard let url = currentChunkURL,
+              let startedAt = currentChunkStartDate,
+              let transcriptTimestamp = currentChunkTranscriptDate else {
             currentChunkFile = nil
             currentChunkFrameCount = 0
             return
@@ -189,6 +204,7 @@ final class SystemAudioCaptureSession: NSObject, SCStreamOutput, SCStreamDelegat
         currentChunkFile = nil
         currentChunkURL = nil
         currentChunkStartDate = nil
+        currentChunkTranscriptDate = nil
         let hasAudio = currentChunkFrameCount > 0
         currentChunkFrameCount = 0
 
@@ -197,6 +213,67 @@ final class SystemAudioCaptureSession: NSObject, SCStreamOutput, SCStreamDelegat
             return
         }
 
-        chunkReadyHandler?(SystemAudioChunk(sourceURL: url, startedAt: startedAt))
+        chunkReadyHandler?(SystemAudioChunk(sourceURL: url, startedAt: startedAt, transcriptTimestamp: transcriptTimestamp))
+    }
+
+    private func retainOverlap(from buffer: AVAudioPCMBuffer) {
+        let maxFrames = AVAudioFrameCount(overlapDurationSeconds * buffer.format.sampleRate)
+        guard maxFrames > 0 else {
+            overlapBuffer = nil
+            return
+        }
+
+        let format = buffer.format
+        let bufferFrames = min(buffer.frameLength, maxFrames)
+        let existingFrames: AVAudioFrameCount
+        if let overlapBuffer, overlapBuffer.format == format {
+            existingFrames = min(overlapBuffer.frameLength, maxFrames - bufferFrames)
+        } else {
+            existingFrames = 0
+        }
+
+        guard let combined = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: existingFrames + bufferFrames) else {
+            overlapBuffer = nil
+            return
+        }
+
+        if existingFrames > 0, let overlapBuffer {
+            copyFrames(
+                from: overlapBuffer,
+                sourceStart: overlapBuffer.frameLength - existingFrames,
+                to: combined,
+                destinationStart: 0,
+                frameCount: existingFrames
+            )
+        }
+
+        copyFrames(
+            from: buffer,
+            sourceStart: buffer.frameLength - bufferFrames,
+            to: combined,
+            destinationStart: existingFrames,
+            frameCount: bufferFrames
+        )
+        combined.frameLength = existingFrames + bufferFrames
+        overlapBuffer = combined
+    }
+
+    private func copyFrames(
+        from source: AVAudioPCMBuffer,
+        sourceStart: AVAudioFrameCount,
+        to destination: AVAudioPCMBuffer,
+        destinationStart: AVAudioFrameCount,
+        frameCount: AVAudioFrameCount
+    ) {
+        guard frameCount > 0,
+              let sourceChannels = source.floatChannelData,
+              let destinationChannels = destination.floatChannelData else { return }
+
+        let channelCount = Int(source.format.channelCount)
+        for channel in 0..<channelCount {
+            let sourcePointer = sourceChannels[channel].advanced(by: Int(sourceStart))
+            let destinationPointer = destinationChannels[channel].advanced(by: Int(destinationStart))
+            destinationPointer.update(from: sourcePointer, count: Int(frameCount))
+        }
     }
 }

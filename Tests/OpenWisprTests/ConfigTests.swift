@@ -150,6 +150,10 @@ final class ConfigTests: XCTestCase {
         XCTAssertNil(Config.defaultConfig.meetingTranscriptDirectory)
     }
 
+    func testConfigDefaultCustomDictionaryIsNil() {
+        XCTAssertNil(Config.defaultConfig.customDictionary)
+    }
+
     // MARK: - customDictionary decoding
 
     func testConfigDecodesWithCustomDictionary() throws {

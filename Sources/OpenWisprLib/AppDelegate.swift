@@ -2,6 +2,7 @@ import AppKit
 
 public class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBar: StatusBarController!
+    var activityOverlay: ActivityOverlayController!
     var hotkeyManager: HotkeyManager?
     var recorder: AudioRecorder!
     var transcriber: Transcriber!
@@ -18,6 +19,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private var startupPreparationComplete = false
     private var hasLoggedAccessibilityGranted = false
     private var hasRequestedAccessibility = false
+    private var meetingTranscriptContext = ""
     public var lastTranscription: String?
     public var currentMeetingTranscriptURL: URL? {
         meetingTranscriptSession?.fileURL
@@ -32,6 +34,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         statusBar = StatusBarController()
+        activityOverlay = ActivityOverlayController()
+        statusBar.onStateChange = { [weak self] state in
+            self?.activityOverlay.update(for: state)
+        }
+        activityOverlay.update(for: statusBar.state)
         recorder = AudioRecorder()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -41,6 +48,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        activityOverlay?.hideAll()
     }
 
     private func setup() {
@@ -429,6 +437,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             let store = TranscriptLogStore(directory: directory)
             let session = try store.startSession(model: config.modelSize, language: config.language)
             let captureSession = SystemAudioCaptureSession()
+            meetingTranscriptContext = ""
             meetingTranscriptSession = session
             captureSession.chunkReadyHandler = { [weak self] chunk in
                 self?.processMeetingChunk(chunk)
@@ -489,6 +498,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                     self.meetingTranscriptSession = nil
                     self.isMeetingCaptureActive = false
                     self.isStoppingMeetingCapture = false
+                    self.meetingTranscriptContext = ""
 
                     if let finalError {
                         self.presentError(finalError.localizedDescription)
@@ -517,10 +527,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 defer { try? FileManager.default.removeItem(at: convertedURL) }
 
                 let raw = try self.transcriber.transcribe(audioURL: convertedURL)
-                let text = self.postProcess(raw)
+                let processed = self.postProcess(raw)
+                let text = TranscriptOverlapResolver.trimCurrentText(
+                    previousText: self.meetingTranscriptContext,
+                    currentText: processed
+                )
                 guard !text.isEmpty else { return }
 
-                try self.meetingTranscriptSession?.append(text: text, at: chunk.startedAt)
+                try self.meetingTranscriptSession?.append(text: text, at: chunk.transcriptTimestamp)
+                self.updateMeetingTranscriptContext(with: text)
                 DispatchQueue.main.async {
                     self.statusBar.buildMenu()
                 }
@@ -604,6 +619,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             statusBar.state = .idle
         }
+    }
+
+    private func updateMeetingTranscriptContext(with text: String, maxTokens: Int = 64) {
+        let combined = meetingTranscriptContext.isEmpty ? text : "\(meetingTranscriptContext) \(text)"
+        let tokens = combined.split(whereSeparator: \.isWhitespace)
+        meetingTranscriptContext = tokens.suffix(maxTokens).joined(separator: " ")
     }
 }
 

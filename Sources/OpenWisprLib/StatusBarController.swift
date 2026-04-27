@@ -19,6 +19,7 @@ class StatusBarController: NSObject {
 
     var reprocessHandler: ((URL) -> Void)?
     var onConfigChange: ((Config) -> Void)?
+    var onStateChange: ((State) -> Void)?
     var startMeetingCaptureHandler: (() -> Void)?
     var stopMeetingCaptureHandler: (() -> Void)?
     var openTranscriptFolderHandler: (() -> Void)?
@@ -38,7 +39,10 @@ class StatusBarController: NSObject {
     }
 
     var state: State = .idle {
-        didSet { updateIcon() }
+        didSet {
+            updateIcon()
+            onStateChange?(state)
+        }
     }
 
     override init() {

@@ -1,13 +1,11 @@
 import Foundation
 
 public struct DictionaryPostProcessor {
-
     private static let trailingPunctuation = CharacterSet(charactersIn: ".,!?;:")
 
     public static func buildPrompt(from entries: [DictionaryEntry]) -> String {
         guard !entries.isEmpty else { return "" }
-        let unique = Array(Set(entries.map { $0.to }))
-            .sorted()
+        let unique = Array(Set(entries.map(\.to))).sorted()
         return "Vocabulary: \(unique.joined(separator: ", "))."
     }
 
@@ -28,47 +26,47 @@ public struct DictionaryPostProcessor {
         }
 
         var result: [String] = []
-        var i = 0
+        var index = 0
 
-        while i < tokens.count {
-            let stripped = stripPunctuation(tokens[i])
+        while index < tokens.count {
+            let stripped = stripPunctuation(tokens[index])
             let lowered = stripped.word.lowercased()
 
-            if let candidates = lookup[lowered] {
-                var matched = false
-                for entry in candidates {
-                    let phraseTokens = entry.from.lowercased().components(separatedBy: " ")
-                    let phraseLen = phraseTokens.count
+            guard let candidates = lookup[lowered] else {
+                result.append(tokens[index])
+                index += 1
+                continue
+            }
 
-                    if i + phraseLen > tokens.count { continue }
+            var matched = false
+            for entry in candidates {
+                let phraseTokens = entry.from.lowercased().components(separatedBy: " ")
+                let phraseLength = phraseTokens.count
+                if index + phraseLength > tokens.count { continue }
 
-                    var allMatch = true
-                    for j in 0..<phraseLen {
-                        let tokenAtJ = (j == phraseLen - 1)
-                            ? stripPunctuation(tokens[i + j]).word.lowercased()
-                            : tokens[i + j].lowercased()
-                        if tokenAtJ != phraseTokens[j] {
-                            allMatch = false
-                            break
-                        }
-                    }
-
-                    if allMatch {
-                        let lastToken = tokens[i + phraseLen - 1]
-                        let lastStripped = stripPunctuation(lastToken)
-                        result.append(entry.to + lastStripped.punctuation)
-                        i += phraseLen
-                        matched = true
+                var allMatch = true
+                for offset in 0..<phraseLength {
+                    let token = offset == phraseLength - 1
+                        ? stripPunctuation(tokens[index + offset]).word.lowercased()
+                        : tokens[index + offset].lowercased()
+                    if token != phraseTokens[offset] {
+                        allMatch = false
                         break
                     }
                 }
-                if !matched {
-                    result.append(tokens[i])
-                    i += 1
+
+                if allMatch {
+                    let trailing = stripPunctuation(tokens[index + phraseLength - 1]).punctuation
+                    result.append(entry.to + trailing)
+                    index += phraseLength
+                    matched = true
+                    break
                 }
-            } else {
-                result.append(tokens[i])
-                i += 1
+            }
+
+            if !matched {
+                result.append(tokens[index])
+                index += 1
             }
         }
 
@@ -81,11 +79,11 @@ public struct DictionaryPostProcessor {
 
     private static func stripPunctuation(_ token: String) -> (word: String, punctuation: String) {
         var word = token
-        var punct = ""
+        var punctuation = ""
         while let last = word.unicodeScalars.last, trailingPunctuation.contains(last) {
-            punct = String(last) + punct
+            punctuation = String(last) + punctuation
             word = String(word.dropLast())
         }
-        return (word, punct)
+        return (word, punctuation)
     }
 }
