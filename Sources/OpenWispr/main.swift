@@ -139,7 +139,9 @@ func cmdStatus() {
     let langName = Config.supportedLanguages.first(where: { $0.code == config.language })?.name ?? config.language
     print("Language:    \(langName) (\(config.language))")
     let toggleMode = config.toggleMode?.value ?? false
+    let assistant = config.assistant ?? AssistantConfig.defaultConfig
     print("Toggle:      \(toggleMode ? "on (press to start/stop)" : "off (hold to talk)")")
+    print("Assistant:   \(assistant.isEnabled ? "enabled" : "disabled")")
 }
 
 let args = CommandLine.arguments

@@ -1,9 +1,16 @@
 import AppKit
 
 public class AppDelegate: NSObject, NSApplicationDelegate {
+    enum CaptureMode {
+        case none
+        case dictation
+        case assistant
+    }
+
     var statusBar: StatusBarController!
     var activityOverlay: ActivityOverlayController!
     var hotkeyManager: HotkeyManager?
+    var assistantHotkeyManager: HotkeyManager?
     var recorder: AudioRecorder!
     var transcriber: Transcriber!
     var inserter: TextInserter!
@@ -20,6 +27,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private var hasLoggedAccessibilityGranted = false
     private var hasRequestedAccessibility = false
     private var meetingTranscriptContext = ""
+    private var captureMode: CaptureMode = .none
+    private let assistantSkillStore = AssistantSkillStore()
+    private let assistantHistoryStore = AssistantHistoryStore()
+    private let assistantMatcher = AssistantMatcher()
+    private let assistantExecutor = AssistantExecutor()
+    private var pendingAssistantRequest: SkillExecutionRequest?
     public var lastTranscription: String?
     public var currentMeetingTranscriptURL: URL? {
         meetingTranscriptSession?.fileURL
@@ -40,6 +53,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         activityOverlay.update(for: statusBar.state)
         recorder = AudioRecorder()
+        let dashboard = AssistantDashboardWindowController.shared
+        dashboard.executeTranscriptHandler = { [weak self] input in
+            self?.handleAssistantTranscript(input, source: .dashboard, originalTranscript: input, allowDictationFallback: false)
+        }
+        dashboard.executePendingHandler = { [weak self] in
+            self?.executePendingAssistantRequest()
+        }
+        dashboard.onConfigChange = { [weak self] newConfig in
+            self?.applyConfigChange(newConfig)
+        }
+        dashboard.onSkillsChanged = { [weak self] in
+            self?.statusBar.buildMenu()
+        }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.setup()
@@ -89,6 +115,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.statusBar.openCurrentTranscriptHandler = { [weak self] in
                 self?.openCurrentMeetingTranscript()
+            }
+            self.statusBar.openAssistantDashboardHandler = { [weak self] in
+                self?.openAssistantDashboard()
             }
             self.statusBar.buildMenu()
         }
@@ -204,6 +233,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         isReady = true
+        configureAssistantHotkeyManager()
         statusBar.state = .idle
         statusBar.buildMenu()
 
@@ -231,6 +261,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         inserter = TextInserter()
 
         hotkeyManager?.stop()
+        assistantHotkeyManager?.stop()
         hotkeyManager = HotkeyManager(
             keyCode: config.hotkey.keyCode,
             modifiers: config.hotkey.modifierFlags
@@ -239,6 +270,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             onKeyDown: { [weak self] in self?.handleKeyDown() },
             onKeyUp: { [weak self] in self?.handleKeyUp() }
         )
+        configureAssistantHotkeyManager()
 
         if !wasDownloading && !Transcriber.modelExists(modelSize: config.modelSize) {
             statusBar.state = .downloading
@@ -274,18 +306,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleKeyDown() {
         guard isReady else { return }
         guard !isMeetingCaptureActive, !isStoppingMeetingCapture else { return }
+        guard captureMode == .none || captureMode == .dictation else { return }
 
         let isToggle = config.toggleMode?.value ?? false
 
         if isToggle {
-            if isPressed {
-                handleRecordingStop()
+            if isPressed, captureMode == .dictation {
+                handleRecordingStop(mode: .dictation)
             } else {
-                handleRecordingStart()
+                handleRecordingStart(mode: .dictation)
             }
         } else {
             guard !isPressed else { return }
-            handleRecordingStart()
+            handleRecordingStart(mode: .dictation)
         }
     }
 
@@ -293,10 +326,34 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let isToggle = config.toggleMode?.value ?? false
         if isToggle { return }
 
-        handleRecordingStop()
+        handleRecordingStop(mode: .dictation)
     }
 
-    private func handleRecordingStart() {
+    private func handleAssistantKeyDown() {
+        guard isReady else { return }
+        guard !isMeetingCaptureActive, !isStoppingMeetingCapture else { return }
+        guard captureMode == .none || captureMode == .assistant else { return }
+
+        let isToggle = config.toggleMode?.value ?? false
+        if isToggle {
+            if isPressed, captureMode == .assistant {
+                handleRecordingStop(mode: .assistant)
+            } else {
+                handleRecordingStart(mode: .assistant)
+            }
+        } else {
+            guard !isPressed else { return }
+            handleRecordingStart(mode: .assistant)
+        }
+    }
+
+    private func handleAssistantKeyUp() {
+        let isToggle = config.toggleMode?.value ?? false
+        if isToggle { return }
+        handleRecordingStop(mode: .assistant)
+    }
+
+    private func handleRecordingStart(mode: CaptureMode) {
         guard !isPressed else { return }
 
         switch Permissions.ensureMicrophone() {
@@ -309,6 +366,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         isPressed = true
+        captureMode = mode
         statusBar.state = .recording
         do {
             let outputURL: URL
@@ -321,13 +379,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             print("Error: \(error.localizedDescription)")
             isPressed = false
+            captureMode = .none
             statusBar.state = .idle
         }
     }
 
-    private func handleRecordingStop() {
+    private func handleRecordingStop(mode: CaptureMode) {
         guard isPressed else { return }
+        guard captureMode == mode else { return }
         isPressed = false
+        captureMode = .none
 
         guard let audioURL = recorder.stopRecording() else {
             statusBar.state = .idle
@@ -351,12 +412,20 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                     RecordingStore.prune(maxCount: maxRecordings)
                 }
                 DispatchQueue.main.async {
-                    if !text.isEmpty {
-                        self.lastTranscription = text
-                        self.inserter.insert(text: text)
+                    switch mode {
+                    case .dictation:
+                        self.handleDictationTranscript(text)
+                    case .assistant:
+                        _ = self.handleAssistantTranscript(
+                            text,
+                            source: .assistantHotkey,
+                            originalTranscript: text,
+                            allowDictationFallback: false
+                        )
+                    case .none:
+                        self.statusBar.state = .idle
+                        self.statusBar.buildMenu()
                     }
-                    self.statusBar.state = .idle
-                    self.statusBar.buildMenu()
                 }
             } catch {
                 if maxRecordings > 0 {
@@ -599,6 +668,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(url)
     }
 
+    func openAssistantDashboard() {
+        let dashboard = AssistantDashboardWindowController.shared
+        dashboard.reload()
+        dashboard.showWindow(nil)
+        dashboard.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func presentError(_ message: String) {
         print("Error: \(message)")
         statusBar.state = .error(message)
@@ -619,6 +696,201 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             statusBar.state = .idle
         }
+    }
+
+    private func handleDictationTranscript(_ text: String) {
+        guard !text.isEmpty else {
+            statusBar.state = .idle
+            statusBar.buildMenu()
+            return
+        }
+
+        let assistant = currentAssistantConfig()
+        if assistant.isEnabled {
+            if assistant.resolvedInvocationModes.contains(.wakePhrase),
+               let stripped = assistantMatcher.stripWakePhrase(from: text, wakePhrase: assistant.resolvedWakePhrase) {
+                _ = handleAssistantTranscript(
+                    stripped,
+                    source: .wakePhrase,
+                    originalTranscript: text,
+                    allowDictationFallback: false
+                )
+                return
+            }
+
+            if assistant.resolvedInvocationModes.contains(.intentDetect),
+               handleAssistantTranscript(
+                    text,
+                    source: .intentDetect,
+                    originalTranscript: text,
+                    allowDictationFallback: true
+               ) {
+                return
+            }
+        }
+
+        lastTranscription = text
+        inserter.insert(text: text)
+        statusBar.state = .idle
+        statusBar.buildMenu()
+    }
+
+    @discardableResult
+    private func handleAssistantTranscript(
+        _ transcript: String,
+        source: AssistantInvocationSource,
+        originalTranscript: String,
+        allowDictationFallback: Bool
+    ) -> Bool {
+        let assistant = currentAssistantConfig()
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard assistant.isEnabled || source == .dashboard else { return false }
+        guard !trimmed.isEmpty else {
+            statusBar.state = .idle
+            statusBar.buildMenu()
+            return source != .intentDetect || !allowDictationFallback
+        }
+
+        let skills = (try? assistantSkillStore.loadSkills(for: assistant)) ?? []
+        let resolution = assistantMatcher.resolve(transcript: trimmed, skills: skills, source: source)
+        switch resolution {
+        case .none:
+            if allowDictationFallback {
+                return false
+            }
+            pendingAssistantRequest = nil
+            AssistantDashboardWindowController.shared.presentDraft(
+                input: originalTranscript,
+                summary: "No matching skill. Edit or run from the dashboard.",
+                requiresConfirmation: false
+            )
+            statusBar.state = .idle
+            statusBar.buildMenu()
+            return true
+        case .matched(let request, let ambiguous):
+            if shouldPreview(request: request, ambiguous: ambiguous) {
+                pendingAssistantRequest = request
+                AssistantDashboardWindowController.shared.presentDraft(
+                    input: originalTranscript,
+                    summary: assistantSummary(for: request, ambiguous: ambiguous),
+                    requiresConfirmation: true
+                )
+                statusBar.state = .idle
+                statusBar.buildMenu()
+                return true
+            }
+            executeAssistantRequest(request)
+            return true
+        }
+    }
+
+    private func shouldPreview(request: SkillExecutionRequest, ambiguous: Bool) -> Bool {
+        let assistant = currentAssistantConfig()
+        if ambiguous { return true }
+        if request.skill.kind == .codex { return true }
+        if request.skill.requiresConfirmation { return true }
+        if !request.skill.trusted { return true }
+        return !assistant.shouldAutoRunDeterministicSkills
+    }
+
+    private func assistantSummary(for request: SkillExecutionRequest, ambiguous: Bool) -> String {
+        if ambiguous {
+            return "Ambiguous match for '\(request.input.isEmpty ? request.matchedTrigger : request.input)'. Confirm '\(request.skill.title)' before running."
+        }
+        if request.skill.kind == .codex {
+            return "Codex task matched '\(request.skill.title)'. Review and confirm before running."
+        }
+        return "Skill matched: \(request.skill.title). Confirm to run."
+    }
+
+    private func executePendingAssistantRequest() {
+        guard let request = pendingAssistantRequest else { return }
+        pendingAssistantRequest = nil
+        executeAssistantRequest(request)
+    }
+
+    private func executeAssistantRequest(_ request: SkillExecutionRequest) {
+        statusBar.state = .transcribing
+        statusBar.buildMenu()
+
+        let assistantConfig = currentAssistantConfig()
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = try self.assistantExecutor.execute(
+                    AssistantExecutionContext(
+                        assistantConfig: assistantConfig,
+                        request: request
+                    )
+                )
+                try? self.assistantHistoryStore.append(result: result, for: assistantConfig)
+                DispatchQueue.main.async {
+                    self.routeAssistantOutput(result, outputMode: request.skill.effectiveOutputMode)
+                    AssistantDashboardWindowController.shared.presentResult(result)
+                    self.statusBar.state = .idle
+                    self.statusBar.buildMenu()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.presentError(error.localizedDescription)
+                    let failed = SkillExecutionResult(
+                        skillID: request.skill.id,
+                        skillTitle: request.skill.title,
+                        kind: request.skill.kind,
+                        source: request.source,
+                        input: request.input,
+                        matchedTrigger: request.matchedTrigger,
+                        outputText: "",
+                        standardError: error.localizedDescription,
+                        exitCode: 1,
+                        startedAt: Date(),
+                        finishedAt: Date()
+                    )
+                    AssistantDashboardWindowController.shared.presentResult(failed)
+                }
+            }
+        }
+    }
+
+    private func routeAssistantOutput(_ result: SkillExecutionResult, outputMode: AssistantOutputMode) {
+        guard result.succeeded else { return }
+        let output = result.outputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !output.isEmpty else { return }
+        lastTranscription = output
+
+        switch outputMode {
+        case .dashboard, .none:
+            break
+        case .copy:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output, forType: .string)
+        case .insert:
+            inserter.insert(text: output)
+        }
+    }
+
+    private func currentAssistantConfig() -> AssistantConfig {
+        config.assistant ?? AssistantConfig.defaultConfig
+    }
+
+    private func configureAssistantHotkeyManager() {
+        assistantHotkeyManager?.stop()
+        assistantHotkeyManager = nil
+
+        let assistant = currentAssistantConfig()
+        guard assistant.isEnabled,
+              assistant.resolvedInvocationModes.contains(.assistantHotkey),
+              let hotkey = assistant.hotkey else {
+            return
+        }
+
+        assistantHotkeyManager = HotkeyManager(
+            keyCode: hotkey.keyCode,
+            modifiers: hotkey.modifierFlags
+        )
+        assistantHotkeyManager?.start(
+            onKeyDown: { [weak self] in self?.handleAssistantKeyDown() },
+            onKeyUp: { [weak self] in self?.handleAssistantKeyUp() }
+        )
     }
 
     private func updateMeetingTranscriptContext(with text: String, maxTokens: Int = 64) {

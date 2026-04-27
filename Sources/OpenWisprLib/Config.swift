@@ -26,6 +26,7 @@ public struct Config: Codable {
     public var audioInputDeviceID: UInt32?
     public var meetingTranscriptDirectory: String?
     public var customDictionary: [DictionaryEntry]?
+    public var assistant: AssistantConfig?
 
     public static let supportedLanguages: [LanguageOption] = [
         LanguageOption(code: "auto", name: "Auto-Detect"),
@@ -173,7 +174,8 @@ public struct Config: Codable {
         toggleMode: FlexBool(false),
         audioInputDeviceID: nil,
         meetingTranscriptDirectory: nil,
-        customDictionary: nil
+        customDictionary: nil,
+        assistant: AssistantConfig.defaultConfig
     )
 
     public static var configDir: URL {
@@ -245,7 +247,7 @@ public struct FlexBool: Codable {
     }
 }
 
-public struct HotkeyConfig: Codable {
+public struct HotkeyConfig: Codable, Equatable {
     public var keyCode: UInt16
     public var modifiers: [String]
 

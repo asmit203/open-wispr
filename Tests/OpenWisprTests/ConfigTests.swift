@@ -101,6 +101,39 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(config.meetingTranscriptDirectory, "/tmp/transcripts")
     }
 
+    func testConfigDecodesAssistantConfig() throws {
+        let json = """
+        {
+            "hotkey": {"keyCode": 63, "modifiers": []},
+            "modelSize": "base.en",
+            "language": "en",
+            "assistant": {
+                "enabled": true,
+                "invocationModes": ["wakePhrase", "assistantHotkey"],
+                "wakePhrase": "computer",
+                "defaultOutputMode": "dashboard",
+                "codexRunner": {
+                    "command": "/usr/local/bin/codex",
+                    "args": ["run"],
+                    "model": "gpt-5"
+                }
+            }
+        }
+        """.data(using: .utf8)!
+        let config = try Config.decode(from: json)
+        XCTAssertEqual(config.assistant?.enabled, true)
+        XCTAssertEqual(config.assistant?.resolvedInvocationModes, [.wakePhrase, .assistantHotkey])
+        XCTAssertEqual(config.assistant?.resolvedWakePhrase, "computer")
+        XCTAssertEqual(config.assistant?.codexRunner?.command, "/usr/local/bin/codex")
+        XCTAssertEqual(config.assistant?.codexRunner?.args, ["run"])
+        XCTAssertEqual(config.assistant?.codexRunner?.model, "gpt-5")
+    }
+
+    func testConfigDefaultAssistantIsDisabled() {
+        XCTAssertEqual(Config.defaultConfig.assistant?.isEnabled, false)
+        XCTAssertEqual(Config.defaultConfig.assistant?.resolvedInvocationModes, [.wakePhrase])
+    }
+
     // MARK: - toggleMode decoding
 
     func testConfigDecodesToggleModeTrue() throws {

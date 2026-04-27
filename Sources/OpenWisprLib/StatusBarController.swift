@@ -24,6 +24,7 @@ class StatusBarController: NSObject {
     var stopMeetingCaptureHandler: (() -> Void)?
     var openTranscriptFolderHandler: (() -> Void)?
     var openCurrentTranscriptHandler: (() -> Void)?
+    var openAssistantDashboardHandler: (() -> Void)?
 
     enum State {
         case idle
@@ -374,6 +375,14 @@ class StatusBarController: NSObject {
         let dictItem = NSMenuItem(title: "Custom Dictionary...", action: #selector(MenuItemTarget.invoke), keyEquivalent: "d")
         dictItem.target = dictTarget
         menu.addItem(dictItem)
+
+        let assistantTarget = MenuItemTarget { [weak self] in
+            self?.openAssistantDashboardHandler?()
+        }
+        menuItemTargets.append(assistantTarget)
+        let assistantItem = NSMenuItem(title: "Assistant Dashboard...", action: #selector(MenuItemTarget.invoke), keyEquivalent: "a")
+        assistantItem.target = assistantTarget
+        menu.addItem(assistantItem)
 
         menu.addItem(NSMenuItem.separator())
 
